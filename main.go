@@ -17,9 +17,6 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// GETTING THE PATH FOR THE NOTES DIRECTORY
-const configFile = ".notes_app"
-
 type Note struct {
 	Title string
 	Path  string
@@ -261,6 +258,7 @@ func initialModel() model {
 	l.Title = "NOTES"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
+	l.SetShowFilter(true)
 	l.SetShowHelp(false)
 
 	textinput := textinput.New()
@@ -364,13 +362,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if m.settingPath {
 		m.textinput, cmd = m.textinput.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 	if m.viewing {
 		m.viewport, cmd = m.viewport.Update(msg)
+		cmds = append(cmds, cmd)
 
 	}
 	if !m.viewing && !m.settingPath {
 		m.list, cmd = m.list.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 	m.renderSelectedNote()
 
