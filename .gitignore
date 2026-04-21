@@ -1,0 +1,12 @@
+# Go build outputs
+notes_tui
+*.exe
+*.test
+*.out
+*.coverprofile
+coverage.out
+
+# Local editor / OS files
+.DS_Store
+*.swp
+*.swo
