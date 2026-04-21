@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"time"
+	// "regexp"
 	"strings"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -17,18 +19,6 @@ import (
 
 // GETTING THE PATH FOR THE NOTES DIRECTORY
 const configFile = ".notes_app"
-
-func loadPathFile() (string, error) {
-	file, err := os.ReadFile(configFile)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(file)), nil
-}
-
-func savePathToFile(path string) error {
-	return os.WriteFile(configFile, []byte(path), 0644)
-}
 
 type Note struct {
 	Title string
@@ -40,6 +30,8 @@ type item struct {
 	path  string
 }
 
+type notesLoadedMsg []Note
+
 func (i item) Title() string       { return i.title }
 func (i item) Description() string { return "" }
 func (i item) FilterValue() string { return i.title }
@@ -50,13 +42,17 @@ type model struct {
 	content     string
 	viewing     bool
 	settingPath bool
+	notesPath   string
+	loading     bool
+	loadingMsg  string
 
 	width  int
 	height int
 
+	spinner   spinner.Model
 	viewport  viewport.Model
 	renderer  *glamour.TermRenderer
-	textInput textinput.Model
+	textinput textinput.Model
 }
 
 // HELPER FUNCTIONS
@@ -95,8 +91,12 @@ func (m *model) layoutSizes() {
 		Width(m.width).
 		BorderStyle(lipgloss.RoundedBorder())
 
+	helpStyle := lipgloss.NewStyle().
+		Width(m.width)
+
 	title := titleStyle.Render("X")
-	usedHeight := lipgloss.Height(title)
+	help := helpStyle.Render("")
+	usedHeight := lipgloss.Height(title) + lipgloss.Height(help)
 	contentHeight := m.height - usedHeight
 	innerHeight := contentHeight - contentStyle.GetVerticalFrameSize()
 
@@ -193,16 +193,68 @@ func fancyHeader(title string, width int) string {
 	return out
 }
 
-// INPUT COMMAND FUNCTION
+func getConfigFile() (string, error) {
+	directory, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	appDirectory := filepath.Join(directory, "notes_tui")
+	err = os.MkdirAll(appDirectory, 0755)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(appDirectory, "path.txt"), nil
+}
+
+func savePath(path string) error {
+	file, err := getConfigFile()
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(file, []byte(path), 0644)
+}
+
+func loadPathFile() (string, error) {
+	pathFile, err := getConfigFile()
+	if err != nil {
+		return "", err
+	}
+
+	path, err := os.ReadFile(pathFile)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(path)), nil
+}
+
+// Bubbletea Commands
+func loadNotesCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(1000 * time.Millisecond)
+
+		notes := loadNotes(path)
+		return notesLoadedMsg(notes)
+	}
+}
 
 // ACTUAL TUI MODEL
 
 func initialModel() model {
+	notesPath, err := loadPathFile()
+	if err != nil {
+
+	}
 
 	items := []list.Item{}
-	for _, n := range loadNotes("/Users/martin/Documents/notes/") {
-		items = append(items, item{title: n.Title, path: n.Path})
 
+	if notesPath != "" {
+
+		for _, n := range loadNotes(notesPath) {
+			items = append(items, item{title: n.Title, path: n.Path})
+		}
 	}
 
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
@@ -211,27 +263,40 @@ func initialModel() model {
 	l.SetFilteringEnabled(true)
 	l.SetShowHelp(false)
 
-	pathPrompt := textinput.New()
-	pathPrompt.Placeholder = "~/path/to/notes"
-	pathPrompt.Focus()
-	pathPrompt.SetWidth(40)
+	textinput := textinput.New()
+	textinput.Styles().Blurred.Text.AlignHorizontal(lipgloss.Center)
+	textinput.Placeholder = "full/path/to/notes"
+	textinput.Focus()
+
+	s := spinner.New()
+	s.Spinner = spinner.Meter
+
+	havePath := true
+	if notesPath == "" {
+		havePath = false
+	}
 
 	return model{
 
 		list:        l,
 		viewport:    viewport.Model{},
-		settingPath: true,
-		textInput:   pathPrompt,
+		spinner:     s,
+		settingPath: !havePath,
+		textinput:   textinput,
+		notesPath:   notesPath,
 	}
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return m.spinner.Tick
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
+	var cmds []tea.Cmd
+	m.spinner, cmd = m.spinner.Update(msg)
+	cmds = append(cmds, cmd)
 
 	switch msg := msg.(type) {
 
@@ -241,10 +306,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.layoutSizes()
 		m.renderSelectedNote()
-		m.viewport.HighlightStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Background(lipgloss.Color("34"))
-		m.viewport.SelectedHighlightStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Background(lipgloss.Color("47"))
-		m.viewport.SetHighlights(regexp.MustCompile("is").FindAllStringIndex(m.content, -1))
-		m.viewport.HighlightNext()
+
+	case notesLoadedMsg:
+		m.loading = false
+
+		items := []list.Item{}
+		for _, n := range msg {
+			items = append(items, item{title: n.Title, path: n.Path})
+		}
+
+		m.list.SetItems(items)
+		m.settingPath = false
+		m.layoutSizes()
+
+		return m, nil
 
 	case tea.KeyPressMsg:
 
@@ -260,7 +335,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "enter":
-			m.viewing = !m.viewing
+			if m.viewing == false && m.settingPath == false {
+				m.viewing = true
+			}
+			if m.settingPath == true {
+				path := strings.TrimSpace(m.textinput.Value())
+				err := savePath(path)
+				if err != nil {
+					fmt.Println("File not found!, please write the whole path, '~' expansion is not supported yet.")
+				}
+
+				if path != "" {
+					m.loading = true
+					m.loadingMsg = "Loading notes..."
+					return m, tea.Batch(
+						m.spinner.Tick,
+						loadNotesCmd(path),
+					)
+				}
+
+			}
 			m.layoutSizes()
 			m.renderSelectedNote()
 			return m, nil
@@ -268,19 +362,106 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	}
 
+	if m.settingPath {
+		m.textinput, cmd = m.textinput.Update(msg)
+	}
 	if m.viewing {
 		m.viewport, cmd = m.viewport.Update(msg)
 
 	}
-	if !m.viewing {
+	if !m.viewing && !m.settingPath {
 		m.list, cmd = m.list.Update(msg)
 	}
 	m.renderSelectedNote()
 
-	return m, cmd
+	return m, tea.Batch(cmds...)
 }
 
 func (m model) View() tea.View {
+	if m.settingPath {
+
+		promptWidth := m.width / 3
+		promptHeight := 5
+
+		contentStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Height(m.height - 2).
+			Foreground(lipgloss.Color("240")).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("243"))
+
+		promptStyle := lipgloss.NewStyle().
+			Width(promptWidth).
+			Align(lipgloss.Center).
+			Foreground(lipgloss.BrightWhite).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForegroundBlend(lipgloss.Color("#FF5F87"), lipgloss.Color("#7D56F4")).
+			Padding(1)
+
+		helpStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color("243"))
+
+		backgroundFiller := strings.Builder{}
+
+		rows := m.height - 4
+		cols := m.width - 2
+		for range rows {
+			for range cols {
+				backgroundFiller.WriteString("#")
+			}
+		}
+
+		x := (m.width - promptWidth) / 2
+		y := (m.height - promptHeight) / 2
+
+		m.textinput.SetWidth(promptWidth)
+
+		title := fancyHeader("TERMINAL NOTES", m.width)
+		content := contentStyle.Render(backgroundFiller.String())
+		help := helpStyle.Render("q quit")
+
+		var promptContent string
+
+		if m.loading {
+			promptContent = lipgloss.JoinVertical(
+				lipgloss.Center,
+				"Loading notes...",
+				"",
+				m.spinner.View(),
+			)
+		} else {
+			promptContent = lipgloss.JoinVertical(
+				lipgloss.Top,
+				"Enter your notes's file path:",
+				"",
+				lipgloss.NewStyle().Foreground(lipgloss.BrightWhite).Render(m.textinput.View()),
+				"",
+				"",
+				lipgloss.NewStyle().
+					Foreground(lipgloss.Color("243")).
+					Align(lipgloss.Center).
+					Render("<enter> to load the notes."),
+			)
+		}
+
+		prompt := promptStyle.Render(promptContent)
+
+		background := lipgloss.JoinVertical(lipgloss.Top, title, content, help)
+
+		layers := []*lipgloss.Layer{
+			lipgloss.NewLayer(background),
+			lipgloss.NewLayer(prompt).X(x).Y(y).Z(1),
+		}
+
+		screen := lipgloss.NewCompositor(layers...)
+		v := tea.NewView(screen.Render())
+		v.AltScreen = true
+
+		return v
+	}
+
 	if m.viewing {
 		selected := m.list.SelectedItem().(item)
 
@@ -289,18 +470,18 @@ func (m model) View() tea.View {
 			Align(lipgloss.Left).
 			Foreground(lipgloss.BrightWhite).
 			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240"))
+			BorderForeground(lipgloss.Color("243"))
 
-		hintStyle := lipgloss.NewStyle().
+		helpStyle := lipgloss.NewStyle().
 			Width(m.width).
 			Align(lipgloss.Center).
-			Foreground(lipgloss.White).Faint(true)
+			Foreground(lipgloss.Color("243"))
 
 		title := fancyHeader(selected.title, m.width)
 		content := contentStyle.Render(m.viewport.View())
-		hint := hintStyle.Render("Press q to go back")
+		help := helpStyle.Render("↑/k scroll up • ↓/j scroll down • ←/h left • →/l right • q back")
 
-		v := tea.NewView(title + "\n" + content + "\n" + hint)
+		v := tea.NewView(title + "\n" + content + "\n" + help)
 		v.AltScreen = true
 
 		return v
@@ -311,19 +492,21 @@ func (m model) View() tea.View {
 
 	leftStyle := lipgloss.NewStyle().
 		Width(leftWidth).
-		Height(m.viewport.Height()).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
+		BorderForeground(lipgloss.Color("243"))
 
 	rightStyle := lipgloss.NewStyle().
 		Width(rightWidth).
 		Height(m.viewport.Height()).
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
+		BorderForeground(lipgloss.Color("243"))
 
-	m.list.SetHeight(m.viewport.Height())
+	helpStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Align(lipgloss.Center).
+		Foreground(lipgloss.Color("243"))
 
-	title := fancyHeader("MY NOTES APP", m.width)
+	title := fancyHeader("TEMINAL NOTES", m.width)
 	left := leftStyle.Render(m.list.View())
 	right := rightStyle.Render(m.viewport.View())
 
@@ -333,7 +516,9 @@ func (m model) View() tea.View {
 		right,
 	)
 
-	v := tea.NewView(title + "\n" + content)
+	help := helpStyle.Render("↑/k up • ↓/j down • / filter • enter full view • q quit")
+
+	v := tea.NewView(title + "\n" + content + "\n" + help)
 	v.AltScreen = true
 
 	return v
