@@ -8,6 +8,7 @@ notes_tui
 coverage.out
 
 # Local editor / OS files
+AGENTS.md
 .DS_Store
 *.swp
 *.swo
