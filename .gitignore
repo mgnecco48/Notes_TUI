@@ -1,6 +1,7 @@
 # Go build outputs
 notes_tui
 *.exe
+!dist/*.exe
 *.test
 *.out
 *.coverprofile
