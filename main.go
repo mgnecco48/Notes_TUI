@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -33,11 +34,21 @@ func (i item) Title() string       { return i.title }
 func (i item) Description() string { return "" }
 func (i item) FilterValue() string { return i.title }
 
+func (m *model) selectedNote() (item, bool) {
+	selected := m.list.SelectedItem()
+	if selected == nil {
+		return item{}, false
+	}
+
+	it, ok := selected.(item)
+	return it, ok
+}
+
 type model struct {
 	list        list.Model
-	cursor      int
 	content     string
 	viewing     bool
+	editing     bool
 	settingPath bool
 	notesPath   string
 	loading     bool
@@ -50,6 +61,7 @@ type model struct {
 	viewport  viewport.Model
 	renderer  *glamour.TermRenderer
 	textinput textinput.Model
+	textarea  textarea.Model
 }
 
 // HELPER FUNCTIONS
@@ -101,14 +113,19 @@ func (m *model) layoutSizes() {
 		innerHeight = 1
 	}
 
-	if m.viewing {
+	if m.viewing || m.editing {
 		viewportWidth := m.width - contentStyle.GetHorizontalFrameSize()
 		if viewportWidth < 1 {
 			viewportWidth = 1
 		}
 
-		m.viewport.SetWidth(viewportWidth)
-		m.viewport.SetHeight(innerHeight)
+		if m.editing {
+			m.textarea.SetWidth(viewportWidth)
+			m.textarea.SetHeight(innerHeight)
+		} else {
+			m.viewport.SetWidth(viewportWidth)
+			m.viewport.SetHeight(innerHeight)
+		}
 	} else {
 		leftWidth := m.width / 4
 		rightWidth := m.width - leftWidth
@@ -132,12 +149,10 @@ func (m *model) layoutSizes() {
 }
 
 func (m *model) renderSelectedNote() {
-	selected := m.list.SelectedItem()
-	if selected == nil {
+	it, ok := m.selectedNote()
+	if !ok {
 		return
 	}
-
-	it := selected.(item)
 
 	content, err := os.ReadFile(it.path)
 	if err != nil {
@@ -147,6 +162,7 @@ func (m *model) renderSelectedNote() {
 	m.content = string(content)
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
+		glamour.WithPreservedNewLines(),
 		glamour.WithWordWrap(0),
 	)
 	if err != nil {
@@ -159,6 +175,46 @@ func (m *model) renderSelectedNote() {
 	}
 
 	m.viewport.SetContent(text)
+}
+
+func (m *model) enterEditMode() tea.Cmd {
+	it, ok := m.selectedNote()
+	if !ok {
+		return nil
+	}
+
+	content, err := os.ReadFile(it.path)
+	if err != nil {
+		return nil
+	}
+
+	m.textarea.SetValue(string(content))
+	m.editing = true
+	m.layoutSizes()
+	return m.textarea.Focus()
+}
+
+func (m *model) saveEditedNote() {
+	it, ok := m.selectedNote()
+	if !ok {
+		return
+	}
+
+	if err := os.WriteFile(it.path, []byte(m.textarea.Value()), 0644); err != nil {
+		return
+	}
+
+	m.editing = false
+	m.textarea.Blur()
+	m.renderSelectedNote()
+	m.layoutSizes()
+}
+
+func (m *model) cancelEditMode() {
+	m.editing = false
+	m.textarea.Blur()
+	m.renderSelectedNote()
+	m.layoutSizes()
 }
 
 func fancyHeader(title string, width int) string {
@@ -266,6 +322,12 @@ func initialModel() model {
 	textinput.Placeholder = "full/path/to/notes"
 	textinput.Focus()
 
+	ta := textarea.New()
+	ta.SetStyles(textarea.DefaultDarkStyles())
+	ta.Prompt = ""
+	ta.Placeholder = "Write your note..."
+	ta.Blur()
+
 	s := spinner.New()
 	s.Spinner = spinner.Meter
 
@@ -281,12 +343,15 @@ func initialModel() model {
 		spinner:     s,
 		settingPath: !havePath,
 		textinput:   textinput,
+		textarea:    ta,
 		notesPath:   notesPath,
 	}
 }
 
 func (m model) Init() tea.Cmd {
+
 	return m.spinner.Tick
+
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -303,7 +368,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.layoutSizes()
-		m.renderSelectedNote()
+		if !m.settingPath && !m.editing {
+			m.renderSelectedNote()
+		}
 
 	case notesLoadedMsg:
 		m.loading = false
@@ -320,8 +387,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.list.SettingFilter() {
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
 
 		switch msg.String() {
+		case "e":
+			if !m.editing {
+				return m, m.enterEditMode()
+			}
+
+		case "ctrl+s":
+			if m.editing {
+				m.saveEditedNote()
+				return m, nil
+			}
+
+		case "esc":
+			if m.editing {
+				m.cancelEditMode()
+				return m, nil
+			}
+
+		case "tab", "ctrl+i":
+			if m.editing {
+				m.textarea.InsertString("    ")
+				return m, nil
+			}
 
 		case "ctrl+c", "q":
 			if m.viewing {
@@ -330,9 +423,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renderSelectedNote()
 				return m, nil
 			}
-			return m, tea.Quit
-
+			if !m.editing {
+				return m, tea.Quit
+			}
 		case "enter":
+			if m.editing {
+				m.textarea.InsertString("\n")
+				return m, nil
+			}
+
 			if m.viewing == false && m.settingPath == false {
 				m.viewing = true
 			}
@@ -364,6 +463,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textinput, cmd = m.textinput.Update(msg)
 		cmds = append(cmds, cmd)
 	}
+	if m.editing {
+		m.textarea, cmd = m.textarea.Update(msg)
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
+	}
 	if m.viewing {
 		m.viewport, cmd = m.viewport.Update(msg)
 		cmds = append(cmds, cmd)
@@ -373,7 +477,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list, cmd = m.list.Update(msg)
 		cmds = append(cmds, cmd)
 	}
-	m.renderSelectedNote()
+	if !m.settingPath && !m.editing {
+		m.renderSelectedNote()
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -463,8 +569,39 @@ func (m model) View() tea.View {
 		return v
 	}
 
+	if m.editing {
+		selected, ok := m.selectedNote()
+		if !ok {
+			return tea.NewView("")
+		}
+
+		contentStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Left).
+			Foreground(lipgloss.BrightWhite).
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("243"))
+
+		helpStyle := lipgloss.NewStyle().
+			Width(m.width).
+			Align(lipgloss.Center).
+			Foreground(lipgloss.Color("243"))
+
+		title := fancyHeader("EDITING: "+selected.title, m.width)
+		content := contentStyle.Render(m.textarea.View())
+		help := helpStyle.Render("Ctrl+S save • Esc cancel")
+
+		v := tea.NewView(title + "\n" + content + "\n" + help)
+		v.AltScreen = true
+
+		return v
+	}
+
 	if m.viewing {
-		selected := m.list.SelectedItem().(item)
+		selected, ok := m.selectedNote()
+		if !ok {
+			return tea.NewView("")
+		}
 
 		contentStyle := lipgloss.NewStyle().
 			Width(m.width).
@@ -480,7 +617,7 @@ func (m model) View() tea.View {
 
 		title := fancyHeader(selected.title, m.width)
 		content := contentStyle.Render(m.viewport.View())
-		help := helpStyle.Render("↑/k scroll up • ↓/j scroll down • ←/h left • →/l right • q back")
+		help := helpStyle.Render("↑/k scroll up • ↓/j scroll down • ←/h left • →/l right • e edit • q back")
 
 		v := tea.NewView(title + "\n" + content + "\n" + help)
 		v.AltScreen = true
