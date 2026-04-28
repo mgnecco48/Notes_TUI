@@ -393,8 +393,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
+		case "p":
+			if !m.settingPath && !m.editing && !m.viewing {
+				m.settingPath = true
+				m.layoutSizes()
+				return m, m.textinput.Focus()
+			}
+
 		case "e":
-			if !m.editing {
+			if !m.editing && !m.settingPath {
 				return m, m.enterEditMode()
 			}
 
@@ -407,6 +414,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if m.editing {
 				m.cancelEditMode()
+				return m, nil
+			}
+			if m.settingPath {
+				m.settingPath = false
+				m.layoutSizes()
 				return m, nil
 			}
 
@@ -527,7 +539,7 @@ func (m model) View() tea.View {
 
 		title := fancyHeader("TERMINAL NOTES", m.width)
 		content := contentStyle.Render(backgroundFiller.String())
-		help := helpStyle.Render("q quit")
+		help := helpStyle.Render("q quit • esc cancel")
 
 		var promptContent string
 
@@ -644,7 +656,7 @@ func (m model) View() tea.View {
 		Align(lipgloss.Center).
 		Foreground(lipgloss.Color("243"))
 
-	title := fancyHeader("TEMINAL NOTES", m.width)
+	title := fancyHeader("TERMINAL NOTES", m.width)
 	left := leftStyle.Render(m.list.View())
 	right := rightStyle.Render(m.viewport.View())
 
@@ -654,7 +666,7 @@ func (m model) View() tea.View {
 		right,
 	)
 
-	help := helpStyle.Render("↑/k up • ↓/j down • / filter • enter full view • q quit")
+	help := helpStyle.Render("↑/k up • ↓/j down • / filter • enter full view • q quit • p set path")
 
 	v := tea.NewView(title + "\n" + content + "\n" + help)
 	v.AltScreen = true
