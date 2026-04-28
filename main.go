@@ -46,7 +46,6 @@ func (m *model) selectedNote() (item, bool) {
 
 type model struct {
 	list        list.Model
-	cursor      int
 	content     string
 	viewing     bool
 	editing     bool
@@ -387,10 +386,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.list.SettingFilter() {
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
 
 		switch msg.String() {
 		case "e":
-			if m.viewing && !m.settingPath && !m.editing {
+			if !m.editing {
 				return m, m.enterEditMode()
 			}
 
@@ -413,18 +416,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+c", "q":
-			if m.editing {
-				m.cancelEditMode()
-				return m, nil
-			}
 			if m.viewing {
 				m.viewing = false
 				m.layoutSizes()
 				m.renderSelectedNote()
 				return m, nil
 			}
-			return m, tea.Quit
-
+			if !m.editing {
+				return m, tea.Quit
+			}
 		case "enter":
 			if m.editing {
 				m.textarea.InsertString("\n")
