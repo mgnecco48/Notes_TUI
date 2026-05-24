@@ -16,11 +16,13 @@ The `main` branch supports viewing and editing notes. The editing feature is
 new, so it is still worth testing with notes that are backed up or tracked in
 Git.
 
-> Currently, the colorscheme is hardcoded and designed to work on a dark
-> terminal theme. The TUI components do not render a solid background, so the app
-> relies on the terminal background color. If you are using a light terminal
-> theme, the colors may not look as intended. I plan to add theme selection in
-> the future.
+Currently, the colorscheme is hardcoded and designed to work on a dark
+terminal theme. The TUI components do not render a solid background, so the app
+relies on the terminal background color. If you are using a light terminal
+theme, the colors may not look as intended. I plan to add theme selection in
+the future.
+
+---
 
 If you have Go installed, you can run the app from the project root:
 
